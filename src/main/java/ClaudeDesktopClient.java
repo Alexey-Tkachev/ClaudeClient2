@@ -5,7 +5,6 @@ import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.Model;
 
-import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
@@ -28,9 +27,10 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import java.awt.Insets;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -47,8 +47,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 public class ClaudeDesktopClient extends JFrame
 {
@@ -58,13 +56,14 @@ public class ClaudeDesktopClient extends JFrame
     private static final long MAX_OUTPUT_TOKENS = 128_000L;
     private static final long DEFAULT_OUTPUT_TOKENS = 4_096L;
     private static final long SAFE_PROXY_OUTPUT_TOKENS = 32_000L;
-    private static final int MAX_INLINE_FILES = 50;
-    private static final long MAX_INLINE_FILE_BYTES = 64L * 1024L;
-    private static final long MAX_INLINE_TOTAL_BYTES = 2L * 1024L * 1024L;
     private static final String DEFAULT_BASE_URL = ClaudeFileService.DEFAULT_PROXY_BASE_URL;
+    private static final Path DEFAULT_PROJECT_JAVA_DIR = Paths.get("C:/Users/Alexey Tkachev/Documents/IdeaProjects/ClaudeClient2/src/main/java");
     private static final Path CONFIG_DIR = Paths.get(System.getProperty("user.home"), ".claude-opus-client");
     private static final Path CONFIG_FILE = CONFIG_DIR.resolve("config.properties");
     private static final Path CHATS_FILE = CONFIG_DIR.resolve("chats.ser");
+
+    private final Map<String, List<MessageEntry>> conversations = new LinkedHashMap<>();
+    private final FileTransport fileTransport = new TextFileTransport();
 
     private JTextArea inputArea;
     private JTextArea outputArea;
@@ -72,7 +71,6 @@ public class ClaudeDesktopClient extends JFrame
     private JPasswordField apiKeyField;
     private JTextField baseUrlField;
     private JTextField maxOutputTokensField;
-    private JTextField generatedFileIdField;
 
     private JLabel tokenInfoLabel;
     private JLabel statusLabel;
@@ -83,15 +81,14 @@ public class ClaudeDesktopClient extends JFrame
 
     private JList<String> chatList;
     private DefaultListModel<String> chatListModel;
-    private DefaultListModel<String> attachmentsModel;
-    private JList<String> attachmentsList;
-    private DefaultListModel<String> uploadedFileIdsModel;
-    private DefaultListModel<String> generatedFileIdsModel;
-    private JList<String> uploadedFileIdsList;
-    private JList<String> generatedFileIdsList;
 
-    private final Map<String, List<MessageEntry>> conversations = new LinkedHashMap<>();
-    private final List<Path> attachedFiles = new ArrayList<>();
+    private DefaultListModel<UserVisibleFile> localFilesModel;
+    private DefaultListModel<UserVisibleFile> uploadedFilesModel;
+    private DefaultListModel<UserVisibleFile> aiFilesModel;
+    private JList<UserVisibleFile> localFilesList;
+    private JList<UserVisibleFile> uploadedFilesList;
+    private JList<UserVisibleFile> aiFilesList;
+
     private AnthropicClient client;
     private String currentChatName;
     private long totalInputTokens;
@@ -182,9 +179,9 @@ public class ClaudeDesktopClient extends JFrame
         JScrollPane inputScroll = new JScrollPane(inputArea);
         inputScroll.setBorder(new TitledBorder("Сообщение"));
 
-        JButton sendButton = new JButton("Отправить обычный запрос");
+        JButton sendButton = new JButton("Отправить запрос");
         sendButton.addActionListener(e -> sendMessage());
-        JButton saveAnswerButton = new JButton("Сохранить ответ в файл");
+        JButton saveAnswerButton = new JButton("Сохранить историю в файл");
         saveAnswerButton.addActionListener(e -> saveOutputToFile());
         JButton clearInputButton = new JButton("Очистить ввод");
         clearInputButton.addActionListener(e -> inputArea.setText(""));
@@ -219,7 +216,7 @@ public class ClaudeDesktopClient extends JFrame
         maxOutputTokensField.setToolTipText("max_tokens — это лимит ответа, не размер контекста. 128000 возможно у Anthropic, но ProxyAPI может отказать по балансу; безопасно начинать с 4096–16000.");
 
         tokenInfoLabel = new JLabel(tokenText(0, 0));
-        statusLabel = new JLabel("Статус: модель зафиксирована: " + MODEL_NAME);
+        statusLabel = new JLabel("Статус: модель зафиксирована в клиенте: " + MODEL_NAME);
         keyLoadedLabel = new JLabel();
         keyCheckLabel = new JLabel();
         lastErrorLabel = new JLabel();
@@ -263,64 +260,71 @@ public class ClaudeDesktopClient extends JFrame
 
     private JPanel createFilesPanel()
     {
-        JPanel panel = new JPanel(new BorderLayout(6, 6));
-        attachmentsModel = new DefaultListModel<>();
-        attachmentsList = new JList<>(attachmentsModel);
-        attachmentsList.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(new TitledBorder("Файлы"));
 
-        uploadedFileIdsModel = new DefaultListModel<>();
-        uploadedFileIdsList = new JList<>(uploadedFileIdsModel);
-        generatedFileIdsModel = new DefaultListModel<>();
-        generatedFileIdsList = new JList<>(generatedFileIdsModel);
-        generatedFileIdField = new JTextField(32);
+        localFilesModel = new DefaultListModel<>();
+        uploadedFilesModel = new DefaultListModel<>();
+        aiFilesModel = new DefaultListModel<>();
 
-        JTextArea help = new JTextArea();
-        help.setEditable(false);
-        help.setLineWrap(true);
-        help.setWrapStyleWord(true);
-        help.setText("Режим 2: 1) добавь файл, 2) нажми 'Upload выбранный -> file_id', 3) напиши задачу в поле ввода на вкладке Чат, "
-                + "4) нажми 'Code execution -> generated file_id', 5) выбери найденный file_id и скачай. Если ProxyAPI вернул 404 на /v1/files — этот режим через ProxyAPI сейчас недоступен; нужен прямой Anthropic API или поддержка beta Files API у прокси.");
+        localFilesList = new JList<>(localFilesModel);
+        localFilesList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        uploadedFilesList = new JList<>(uploadedFilesModel);
+        uploadedFilesList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        aiFilesList = new JList<>(aiFilesModel);
+        aiFilesList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
 
-        JButton addFiles = new JButton("Добавить .java/.md/.txt/.zip");
-        addFiles.addActionListener(e -> chooseFiles());
-        JButton remove = new JButton("Убрать выбранный");
-        remove.addActionListener(e -> removeSelectedAttachment());
-        JButton clear = new JButton("Очистить список");
-        clear.addActionListener(e -> clearAttachments());
-        JButton upload = new JButton("Upload выбранный -> file_id (может не работать в ProxyAPI)");
-        upload.addActionListener(e -> uploadSelectedFile());
-        JButton codeExec = new JButton("Code execution -> generated file_id");
-        codeExec.addActionListener(e -> runCodeExecutionForFiles());
-        JButton downloadSelected = new JButton("Скачать выбранный generated file_id");
-        downloadSelected.addActionListener(e -> downloadSelectedGeneratedFile());
-        JButton downloadTyped = new JButton("Скачать file_id из поля");
-        downloadTyped.addActionListener(e -> downloadTypedFileId());
-        JButton list = new JButton("Показать файлы Files API");
-        list.addActionListener(e -> listRemoteFiles());
+        JButton addFilesButton = new JButton("Добавить файлы");
+        addFilesButton.addActionListener(e -> chooseFiles());
+        JButton removeFilesButton = new JButton("Удалить файл");
+        removeFilesButton.addActionListener(e -> removeSelectedLocalFiles());
+        JButton sendFilesButton = new JButton("Отправить файлы");
+        sendFilesButton.addActionListener(e -> sendLocalFilesToModelArea());
+        JButton downloadAiFilesButton = new JButton("Загрузить файлы");
+        downloadAiFilesButton.addActionListener(e -> downloadAiFiles());
 
-        JPanel buttons = new JPanel(new GridLayout(8, 1, 4, 4));
-        buttons.add(addFiles);
-        buttons.add(remove);
-        buttons.add(clear);
-        buttons.add(upload);
-        buttons.add(codeExec);
-        buttons.add(downloadSelected);
-        buttons.add(downloadTyped);
-        buttons.add(list);
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(4, 4, 4, 4);
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1.0;
+        c.gridx = 0;
+        c.gridy = 0;
+        JPanel topButtons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        topButtons.add(addFilesButton);
+        topButtons.add(removeFilesButton);
+        panel.add(topButtons, c);
 
-        JPanel center = new JPanel(new GridLayout(1, 3, 6, 6));
-        center.add(wrap(new JScrollPane(attachmentsList), "Локальные файлы"));
-        center.add(wrap(new JScrollPane(uploadedFileIdsList), "Uploaded file_id для container_upload"));
-        center.add(wrap(new JScrollPane(generatedFileIdsList), "Generated downloadable file_id"));
+        c.gridy = 1;
+        c.fill = GridBagConstraints.BOTH;
+        c.weighty = 0.34;
+        panel.add(wrap(new JScrollPane(localFilesList), "Локальные файлы"), c);
 
-        JPanel south = new JPanel(new BorderLayout(4, 4));
-        south.add(row("file_id вручную:", generatedFileIdField), BorderLayout.NORTH);
-        south.add(new JScrollPane(help), BorderLayout.CENTER);
+        c.gridy = 2;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.weighty = 0;
+        JPanel sendRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        sendRow.add(sendFilesButton);
+        sendRow.add(new JLabel("Файлы будут приложены к следующему запросу в чат, но не будут показаны длинным текстом в истории."));
+        panel.add(sendRow, c);
 
-        panel.add(center, BorderLayout.CENTER);
-        panel.add(buttons, BorderLayout.EAST);
-        panel.add(south, BorderLayout.SOUTH);
-        panel.setBorder(new TitledBorder("Файлы / Files API / code execution"));
+        c.gridy = 3;
+        c.fill = GridBagConstraints.BOTH;
+        c.weighty = 0.33;
+        panel.add(wrap(new JScrollPane(uploadedFilesList), "Uploaded"), c);
+
+        c.gridy = 4;
+        c.fill = GridBagConstraints.BOTH;
+        c.weighty = 0.33;
+        panel.add(wrap(new JScrollPane(aiFilesList), "Файлы ИИ"), c);
+
+        c.gridy = 5;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.weighty = 0;
+        JPanel bottomRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        bottomRow.add(downloadAiFilesButton);
+        bottomRow.add(new JLabel("Если файлов несколько или есть структура папок, они сохранятся ZIP-архивом в «Загрузки»."));
+        panel.add(bottomRow, c);
+
         return panel;
     }
 
@@ -348,23 +352,25 @@ public class ClaudeDesktopClient extends JFrame
             return;
         }
         String userText = inputArea.getText().trim();
-        if (userText.isEmpty() && attachedFiles.isEmpty()) return;
+        List<UserVisibleFile> uploadedFiles = modelToUserVisibleList(uploadedFilesModel);
+        if (userText.isEmpty() && uploadedFiles.isEmpty()) return;
         if (currentChatName == null) createChat("Новый чат", true);
 
-        String attachmentContext;
+        String fileAppendix;
         try
         {
-            attachmentContext = buildAttachmentContext();
+            fileAppendix = fileTransport.buildPromptAppendix(uploadedFiles);
         }
         catch (IOException ex)
         {
-            showError("Не удалось прочитать вложения: " + ex.getMessage());
+            showError("Не удалось подготовить файлы к запросу: " + ex.getMessage());
             return;
         }
-        String fullUserMessage = userText + attachmentContext;
+        String fullUserMessage = userText + fileAppendix;
+        String displayUserMessage = userText + buildUserFileSummary(uploadedFiles);
         List<MessageEntry> history = conversations.get(currentChatName);
 
-        appendOutput("Вы", userText + (attachmentContext.isBlank() ? "" : "\n\n[Вложенные файлы добавлены в запрос]"));
+        appendOutput("Вы", displayUserMessage);
         inputArea.setText("");
         setControlsEnabled(false);
         statusLabel.setText("Статус: запрос выполняется: " + MODEL_NAME);
@@ -378,12 +384,12 @@ public class ClaudeDesktopClient extends JFrame
                         .model(Model.CLAUDE_OPUS_4_7)
                         .maxTokens(readMaxOutputTokens());
 
-                String system = systemPromptArea.getText().trim();
+                String system = systemPromptArea.getText().trim() + "\n\n" + fileReturnInstruction();
                 if (!system.isBlank()) builder.system(system);
                 for (MessageEntry entry : history)
                 {
-                    if ("user".equals(entry.role)) builder.addUserMessage(entry.content);
-                    else if ("assistant".equals(entry.role)) builder.addAssistantMessage(entry.content);
+                    if ("user".equals(entry.role)) builder.addUserMessage(entry.apiContent);
+                    else if ("assistant".equals(entry.role)) builder.addAssistantMessage(entry.apiContent);
                 }
                 builder.addUserMessage(fullUserMessage);
                 return client.messages().create(builder.build());
@@ -395,17 +401,23 @@ public class ClaudeDesktopClient extends JFrame
                 try
                 {
                     Message response = get();
-                    String answer = extractText(response);
-                    history.add(new MessageEntry("user", fullUserMessage));
-                    history.add(new MessageEntry("assistant", answer));
-                    appendOutput("Claude Opus 4.7", answer);
+                    String rawAnswer = extractText(response);
+                    FileProcessingResult processingResult = fileTransport.extractGeneratedFiles(rawAnswer);
+                    for (UserVisibleFile file : processingResult.generatedFiles())
+                    {
+                        aiFilesModel.addElement(file);
+                    }
+                    String visibleAnswer = processingResult.visibleAnswer().isBlank() ? rawAnswer : processingResult.visibleAnswer();
+                    history.add(new MessageEntry("user", fullUserMessage, displayUserMessage));
+                    history.add(new MessageEntry("assistant", rawAnswer, visibleAnswer));
+                    appendOutput("Claude Opus 4.7", visibleAnswer);
                     long in = response.usage().inputTokens();
                     long out = response.usage().outputTokens();
                     totalInputTokens += in;
                     totalOutputTokens += out;
                     tokenInfoLabel.setText(tokenText(in, out));
                     saveChats();
-                    clearAttachments();
+                    uploadedFilesModel.clear();
                     statusLabel.setText("Статус: готово. Последний запрос: input " + in + ", output " + out + ".");
                     refreshSettingsIndicators("успешно", "-");
                 }
@@ -423,6 +435,27 @@ public class ClaudeDesktopClient extends JFrame
         }.execute();
     }
 
+    private String fileReturnInstruction()
+    {
+        return "Если нужно вернуть пользователю файлы, не печатай их как обычный длинный текст. "
+                + "Верни каждый файл строго отдельным блоком вида:\n"
+                + "```file:relative/path/FileName.ext\n<полное содержимое файла>\n```\n"
+                + "Для нескольких файлов сохраняй структуру папок в relative/path. Не используй file_id в ответе пользователю.";
+    }
+
+    private String buildUserFileSummary(List<UserVisibleFile> files)
+    {
+        if (files == null || files.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("\n\n[Файлы добавлены в запрос: ");
+        for (int i = 0; i < files.size(); i++)
+        {
+            if (i > 0) sb.append(", ");
+            sb.append(files.get(i).relativePath());
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
     private String extractText(Message response)
     {
         StringBuilder sb = new StringBuilder();
@@ -433,282 +466,89 @@ public class ClaudeDesktopClient extends JFrame
         return sb.toString().isBlank() ? response.toString() : sb.toString();
     }
 
-    private void runCodeExecutionForFiles()
-    {
-        String prompt = inputArea.getText().trim();
-        if (prompt.isBlank())
-        {
-            showError("На вкладке Чат напиши задачу: какие файлы Claude должен создать.");
-            return;
-        }
-        setControlsEnabled(false);
-        statusLabel.setText("Статус: code execution запрос выполняется");
-        List<String> uploadedIds = modelToList(uploadedFileIdsModel);
-        new SwingWorker<String, Void>()
-        {
-            @Override
-            protected String doInBackground() throws Exception
-            {
-                return new ClaudeFileService(readApiKey(), baseUrlField.getText())
-                        .createMessageWithCodeExecution(prompt, uploadedIds, readMaxOutputTokens());
-            }
-
-            @Override
-            protected void done()
-            {
-                try
-                {
-                    String json = get();
-                    appendOutput("Code execution raw response", json);
-                    List<String> ids = ClaudeFileService.extractFileIds(json);
-                    generatedFileIdsModel.clear();
-                    for (String id : ids)
-                    {
-                        generatedFileIdsModel.addElement(id);
-                    }
-                    if (!ids.isEmpty()) generatedFileIdField.setText(ids.get(ids.size() - 1));
-                    statusLabel.setText("Статус: code execution готово, найдено file_id: " + ids.size());
-                    refreshSettingsIndicators("успешно", "-");
-                }
-                catch (Exception ex)
-                {
-                    statusLabel.setText("Статус: ошибка code execution");
-                    refreshSettingsIndicators("ошибка", rootMessage(ex));
-                    showError(rootMessage(ex));
-                }
-                finally
-                {
-                    setControlsEnabled(true);
-                }
-            }
-        }.execute();
-    }
-
-    private List<String> modelToList(DefaultListModel<String> model)
-    {
-        List<String> result = new ArrayList<>();
-        for (int i = 0; i < model.size(); i++)
-        {
-            result.add(model.get(i));
-        }
-        return result;
-    }
-
-    private String buildAttachmentContext() throws IOException
-    {
-        if (attachedFiles.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder("\n\n---\nВложенные файлы для анализа. Сохраняй имена файлов и учитывай их как часть контекста.\n");
-        long totalBytes = 0L;
-        int count = 0;
-        for (Path path : attachedFiles)
-        {
-            if (count >= MAX_INLINE_FILES || totalBytes >= MAX_INLINE_TOTAL_BYTES) break;
-            if (path.toString().toLowerCase().endsWith(".zip"))
-            {
-                InlineResult result = appendZipEntries(sb, path, count, totalBytes);
-                count = result.count;
-                totalBytes = result.totalBytes;
-            }
-            else if (isInlineTextFile(path.getFileName().toString()))
-            {
-                byte[] bytes = Files.readAllBytes(path);
-                if (bytes.length > MAX_INLINE_FILE_BYTES)
-                {
-                    sb.append("\n[Пропущен файл ").append(path.getFileName()).append(": больше ").append(MAX_INLINE_FILE_BYTES).append(" байт]\n");
-                    continue;
-                }
-                appendOneFile(sb, path.getFileName().toString(), new String(bytes, StandardCharsets.UTF_8));
-                totalBytes += bytes.length;
-                count++;
-            }
-            else
-            {
-                sb.append("\n[Пропущен неподдерживаемый для inline файл: ").append(path.getFileName()).append("]\n");
-            }
-        }
-        sb.append("\n---\n");
-        return sb.toString();
-    }
-
-    private InlineResult appendZipEntries(StringBuilder sb, Path zipPath, int count, long totalBytes) throws IOException
-    {
-        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(Files.readAllBytes(zipPath))))
-        {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null && count < MAX_INLINE_FILES && totalBytes < MAX_INLINE_TOTAL_BYTES)
-            {
-                if (entry.isDirectory() || !isInlineTextFile(entry.getName())) continue;
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                zis.transferTo(bos);
-                byte[] bytes = bos.toByteArray();
-                if (bytes.length > MAX_INLINE_FILE_BYTES)
-                {
-                    sb.append("\n[Пропущен zip-entry ").append(entry.getName()).append(": больше лимита]\n");
-                    continue;
-                }
-                appendOneFile(sb, zipPath.getFileName() + "!/" + entry.getName(), new String(bytes, StandardCharsets.UTF_8));
-                totalBytes += bytes.length;
-                count++;
-            }
-        }
-        return new InlineResult(count, totalBytes);
-    }
-
-    private void appendOneFile(StringBuilder sb, String fileName, String content)
-    {
-        sb.append("\n### FILE: ").append(fileName).append("\n```\n").append(content).append("\n```\n");
-    }
-
-    private boolean isInlineTextFile(String name)
-    {
-        String lower = name.toLowerCase();
-        return lower.endsWith(".java") || lower.endsWith(".md") || lower.endsWith(".txt")
-                || lower.endsWith(".xml") || lower.endsWith(".properties") || lower.endsWith(".json")
-                || lower.endsWith(".yml") || lower.endsWith(".yaml");
-    }
-
     private void chooseFiles()
     {
-        JFileChooser chooser = new JFileChooser(Paths.get("C:/Users/Alexey Tkachev/Documents/IdeaProjects/ClaudeClient2/src/main/java").toFile());
+        JFileChooser chooser = new JFileChooser(Files.isDirectory(DEFAULT_PROJECT_JAVA_DIR) ? DEFAULT_PROJECT_JAVA_DIR.toFile() : downloadsDir().toFile());
         chooser.setMultiSelectionEnabled(true);
-        chooser.setFileFilter(new FileNameExtensionFilter("Code/text/archive", "java", "md", "txt", "zip", "xml", "properties", "json", "yml", "yaml"));
+        chooser.setFileFilter(new FileNameExtensionFilter("Файлы кода, текста и архивы", "java", "md", "txt", "zip", "xml", "properties", "json", "yml", "yaml", "sql", "gradle", "html", "css", "js", "ts"));
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION)
         {
             for (java.io.File file : chooser.getSelectedFiles())
             {
                 Path path = file.toPath();
-                attachedFiles.add(path);
-                attachmentsModel.addElement(path.toString());
+                localFilesModel.addElement(new UserVisibleFile(path.getFileName().toString(), path.getFileName().toString(), path, null, UserVisibleFile.SourceKind.LOCAL));
             }
         }
     }
 
-    private void removeSelectedAttachment()
+    private void removeSelectedLocalFiles()
     {
-        int idx = attachmentsList.getSelectedIndex();
-        if (idx >= 0)
+        removeSelectedFromModel(localFilesList, localFilesModel);
+    }
+
+    private void sendLocalFilesToModelArea()
+    {
+        List<UserVisibleFile> selected = localFilesList.getSelectedValuesList();
+        if (selected.isEmpty()) selected = modelToUserVisibleList(localFilesModel);
+        if (selected.isEmpty()) return;
+        try
         {
-            attachedFiles.remove(idx);
-            attachmentsModel.remove(idx);
+            List<Path> paths = selected.stream().map(UserVisibleFile::localPath).toList();
+            List<UserVisibleFile> uploaded = fileTransport.prepareForModel(paths);
+            for (UserVisibleFile file : uploaded)
+            {
+                uploadedFilesModel.addElement(file);
+            }
+            for (UserVisibleFile file : selected)
+            {
+                localFilesModel.removeElement(file);
+            }
+            statusLabel.setText("Статус: файлы подготовлены к отправке модели: " + uploaded.size());
+        }
+        catch (IOException ex)
+        {
+            showError("Не удалось подготовить файлы: " + ex.getMessage());
         }
     }
 
-    private void clearAttachments()
+    private void downloadAiFiles()
     {
-        attachedFiles.clear();
-        if (attachmentsModel != null) attachmentsModel.clear();
-    }
-
-    private void uploadSelectedFile()
-    {
-        int idx = attachmentsList.getSelectedIndex();
-        if (idx < 0)
+        List<UserVisibleFile> selected = aiFilesList.getSelectedValuesList();
+        if (selected.isEmpty()) selected = modelToUserVisibleList(aiFilesModel);
+        if (selected.isEmpty())
         {
-            showError("Выбери файл в списке локальных файлов.");
+            showError("Нет файлов ИИ для загрузки.");
             return;
         }
-        Path file = attachedFiles.get(idx);
-        new SwingWorker<String, Void>()
+        try
         {
-            @Override
-            protected String doInBackground() throws Exception
-            {
-                return new ClaudeFileService(readApiKey(), baseUrlField.getText()).uploadFile(file);
-            }
-
-            @Override
-            protected void done()
-            {
-                try
-                {
-                    String json = get();
-                    String id = ClaudeFileService.extractUploadedFileId(json);
-                    if (!id.isBlank()) uploadedFileIdsModel.addElement(id);
-                    appendOutput("Files API upload response", json);
-                    statusLabel.setText(id.isBlank() ? "Статус: upload выполнен, file_id не найден" : "Статус: upload выполнен: " + id);
-                }
-                catch (Exception ex)
-                {
-                    refreshSettingsIndicators("ошибка", rootMessage(ex));
-                    showError(rootMessage(ex));
-                }
-            }
-        }.execute();
-    }
-
-    private void listRemoteFiles()
-    {
-        new SwingWorker<String, Void>()
-        {
-            @Override
-            protected String doInBackground() throws Exception
-            {
-                return new ClaudeFileService(readApiKey(), baseUrlField.getText()).listFiles();
-            }
-
-            @Override
-            protected void done()
-            {
-                try
-                {
-                    outputArea.append("\n[Files API list]\n" + get() + "\n");
-                }
-                catch (Exception ex)
-                {
-                    refreshSettingsIndicators("ошибка", rootMessage(ex));
-                    showError(rootMessage(ex));
-                }
-            }
-        }.execute();
-    }
-
-    private void downloadSelectedGeneratedFile()
-    {
-        String id = generatedFileIdsList.getSelectedValue();
-        if (id == null || id.isBlank()) id = generatedFileIdField.getText().trim();
-        downloadFileId(id);
-    }
-
-    private void downloadTypedFileId()
-    {
-        downloadFileId(generatedFileIdField.getText().trim());
-    }
-
-    private void downloadFileId(String fileId)
-    {
-        if (fileId == null || fileId.isBlank())
-        {
-            showError("Укажи file_id.");
-            return;
+            Path savedTo = fileTransport.saveGeneratedFiles(selected, downloadsDir());
+            statusLabel.setText("Статус: файлы ИИ сохранены: " + savedTo);
+            JOptionPane.showMessageDialog(this, "Сохранено: " + savedTo);
         }
-        JFileChooser chooser = new JFileChooser(downloadsDir().toFile());
-        chooser.setSelectedFile(new java.io.File(fileId + ".bin"));
-        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
-        Path saveTo = chooser.getSelectedFile().toPath();
-        new SwingWorker<Void, Void>()
+        catch (IOException ex)
         {
-            @Override
-            protected Void doInBackground() throws Exception
-            {
-                new ClaudeFileService(readApiKey(), baseUrlField.getText()).downloadGeneratedFile(fileId, saveTo);
-                return null;
-            }
+            showError("Не удалось сохранить файлы ИИ: " + ex.getMessage());
+        }
+    }
 
-            @Override
-            protected void done()
-            {
-                try
-                {
-                    get();
-                    statusLabel.setText("Статус: файл скачан: " + saveTo);
-                }
-                catch (Exception ex)
-                {
-                    refreshSettingsIndicators("ошибка", rootMessage(ex));
-                    showError(rootMessage(ex));
-                }
-            }
-        }.execute();
+    private void removeSelectedFromModel(JList<UserVisibleFile> list, DefaultListModel<UserVisibleFile> model)
+    {
+        List<UserVisibleFile> selected = list.getSelectedValuesList();
+        for (UserVisibleFile file : selected)
+        {
+            model.removeElement(file);
+        }
+    }
+
+    private List<UserVisibleFile> modelToUserVisibleList(DefaultListModel<UserVisibleFile> model)
+    {
+        List<UserVisibleFile> result = new ArrayList<>();
+        for (int i = 0; i < model.size(); i++)
+        {
+            result.add(model.get(i));
+        }
+        return result;
     }
 
     private Path downloadsDir()
@@ -969,7 +809,7 @@ public class ClaudeDesktopClient extends JFrame
         outputArea.setText("");
         for (MessageEntry entry : conversations.get(chatName))
         {
-            appendOutput("assistant".equals(entry.role) ? "Claude Opus 4.7" : "Вы", entry.content);
+            appendOutput("assistant".equals(entry.role) ? "Claude Opus 4.7" : "Вы", entry.displayContent == null ? entry.apiContent : entry.displayContent);
         }
     }
 
@@ -992,7 +832,7 @@ public class ClaudeDesktopClient extends JFrame
     private void saveOutputToFile()
     {
         JFileChooser chooser = new JFileChooser(downloadsDir().toFile());
-        chooser.setSelectedFile(new java.io.File("claude-answer.md"));
+        chooser.setSelectedFile(new java.io.File("claude-chat-history.md"));
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION)
         {
             try
@@ -1028,33 +868,29 @@ public class ClaudeDesktopClient extends JFrame
         if (message.contains("Files API") && message.contains("HTTP 404"))
         {
             return message + "\n\nВероятная причина: текущий ProxyAPI endpoint не поддерживает Anthropic Files API /v1/files. "
-                    + "Обычный /v1/messages работает, но режим upload/download через file_id требует поддержки beta Files API на стороне прокси "
-                    + "или прямого Anthropic API base URL.";
+                    + "Вкладка «Файлы» теперь отделена от способа доставки: пользовательский интерфейс остаётся тем же, а транспорт можно заменить позже.";
         }
         if (message.contains("Insufficient balance"))
         {
             return message + "\n\nВероятная причина: слишком большой max_tokens. Это лимит максимального ответа, а не контекста. "
-                    + "При max_tokens=128000 прокси может предварительно резервировать стоимость большого ответа/контекста и отклонять запрос. "
                     + "Поставь в Настройках max_tokens=4096 или 8192 и повтори.";
         }
         return message;
     }
 
-    private record InlineResult(int count, long totalBytes)
-    {
-    }
-
     public static class MessageEntry implements Serializable
     {
         @Serial
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
         public String role;
-        public String content;
+        public String apiContent;
+        public String displayContent;
 
-        public MessageEntry(String role, String content)
+        public MessageEntry(String role, String apiContent, String displayContent)
         {
             this.role = role;
-            this.content = content;
+            this.apiContent = apiContent;
+            this.displayContent = displayContent;
         }
     }
 
