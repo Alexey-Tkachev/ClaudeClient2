@@ -7,7 +7,7 @@ public interface FileTransport {
 
     String buildPromptAppendix(List<UserVisibleFile> uploadedFiles) throws IOException;
 
-    FileProcessingResult extractGeneratedFiles(String modelAnswer) throws IOException;
+    FileProcessingResult extractGeneratedFiles(String modelAnswer, String sourceRoot) throws IOException;
 
     Path saveGeneratedFiles(List<UserVisibleFile> files, Path downloadsDir, String modelDisplayName, String chatName, String sourceRoot) throws IOException;
 }

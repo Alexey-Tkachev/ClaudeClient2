@@ -64,7 +64,7 @@ public class TextFileTransport implements FileTransport {
     }
 
     @Override
-    public FileProcessingResult extractGeneratedFiles(String modelAnswer) {
+    public FileProcessingResult extractGeneratedFiles(String modelAnswer, String sourceRoot) {
         if (modelAnswer == null || modelAnswer.isBlank()) {
             return new FileProcessingResult("", List.of());
         }
@@ -74,7 +74,7 @@ public class TextFileTransport implements FileTransport {
         while (matcher.find()) {
             String rawPath = sanitizeRelativePath(matcher.group(1).trim());
             String content = matcher.group(2);
-            String finalPath = pathForGeneratedFile(rawPath, content, "src/main/java");
+            String finalPath = pathForGeneratedFile(rawPath, content, sourceRoot);
             byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
             files.add(new UserVisibleFile(fileNameOnly(finalPath), finalPath, null, bytes, UserVisibleFile.SourceKind.GENERATED_BY_AI));
             matcher.appendReplacement(visible, Matcher.quoteReplacement(""));

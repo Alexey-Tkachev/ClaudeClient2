@@ -70,12 +70,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class ClaudeDesktopClient extends JFrame {
-    private static final String APP_TITLE = "Claude Opus Desktop Client";
+    private static final String APP_VERSION = "1.0";
+    private static final String APP_TITLE = "Claude Opus Desktop Client " + APP_VERSION;
     private static final String DEFAULT_MODEL_NAME = "claude-opus-4-7";
     private static final String DEFAULT_MODEL_DISPLAY_NAME = "Claude Opus 4.7";
     private static final long DEFAULT_OUTPUT_TOKENS = 4_096L;
-    private static final long SAFE_PROXY_OUTPUT_TOKENS = 32_000L;
-    private static final String DEFAULT_BASE_URL = ClaudeFileService.DEFAULT_PROXY_BASE_URL;
+        private static final String DEFAULT_BASE_URL = ClaudeFileService.DEFAULT_PROXY_BASE_URL;
     private static final Path DEFAULT_PROJECT_JAVA_DIR = Paths.get("C:/Users/Alexey Tkachev/Documents/IdeaProjects/ClaudeClient2/src/main/java");
     private static final Path DEFAULT_CONFIG_DIR = Paths.get(System.getProperty("user.home"), ".claude-opus-client");
     private static final Path BOOTSTRAP_CONFIG_FILE = DEFAULT_CONFIG_DIR.resolve("config.properties");
@@ -238,10 +238,10 @@ public class ClaudeDesktopClient extends JFrame {
     private JPanel createSettingsPanel() {
         JPanel panel = new JPanel(new BorderLayout(8, 8));
 
-        apiKeyField = new JPasswordField(42);
-        baseUrlField = new JTextField(DEFAULT_BASE_URL, 42);
+        apiKeyField = new JPasswordField(24);
+        baseUrlField = new JTextField(DEFAULT_BASE_URL, 24);
         balanceLabel = new JLabel("—");
-        settingsDirField = new JTextField(DEFAULT_CONFIG_DIR.toString(), 50);
+        settingsDirField = new JTextField(DEFAULT_CONFIG_DIR.toString(), 42);
 
         JPanel top = new JPanel(new GridBagLayout());
         GridBagConstraints t = gbcBase();
@@ -281,7 +281,7 @@ public class ClaudeDesktopClient extends JFrame {
         JPanel projectPanel = new JPanel(new GridBagLayout());
         projectPanel.setBorder(new TitledBorder("Проект"));
         GridBagConstraints p = gbcBase();
-        projectDirField = new JTextField(DEFAULT_PROJECT_JAVA_DIR.getParent() == null ? "" : DEFAULT_PROJECT_JAVA_DIR.getParent().getParent().getParent().toString(), 48);
+        projectDirField = new JTextField(defaultProjectDirString(), 42);
         JButton chooseProject = new JButton("...");
         chooseProject.setMargin(new Insets(2, 6, 2, 6));
         chooseProject.addActionListener(e -> chooseProjectDirectory());
@@ -297,10 +297,14 @@ public class ClaudeDesktopClient extends JFrame {
         p.gridy = 0;
         addLabeled(projectPanel, p, 0, "Папка проекта:", projectRow);
 
-        sourceRootCombo = new JComboBox<>(new String[]{"", "src/main/java"});
-        sourceRootCombo.setSelectedItem("src/main/java");
+        sourceRootCombo = new JComboBox<>(new String[]{"", "main/java"});
+        sourceRootCombo.setSelectedItem("main/java");
+        sourceRootCombo.setPrototypeDisplayValue("main/java");
+        JPanel sourceRootPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        sourceRootPanel.add(new JLabel("src/"));
+        sourceRootPanel.add(sourceRootCombo);
         p.gridy = 1;
-        addLabeled(projectPanel, p, 0, "Корень исходников:", sourceRootCombo);
+        addLabeled(projectPanel, p, 0, "Корень исходников:", sourceRootPanel);
         c.gridy = 1; c.gridx = 0; c.gridwidth = 3; c.fill = GridBagConstraints.HORIZONTAL; c.weighty = 0;
         chatSettings.add(projectPanel, c);
 
@@ -329,6 +333,7 @@ public class ClaudeDesktopClient extends JFrame {
         addLabeled(chatSettings, c, 0, "max_tokens ответа:", maxPanel);
 
         modelCombo = new JComboBox<>(new String[]{DEFAULT_MODEL_NAME});
+        modelCombo.setPrototypeDisplayValue(DEFAULT_MODEL_NAME);
         c.gridy = 3;
         addLabeled(chatSettings, c, 0, "Модель:", modelCombo);
 
@@ -345,6 +350,9 @@ public class ClaudeDesktopClient extends JFrame {
         sessionInputLabel = new JLabel("input: 0");
         sessionOutputLabel = new JLabel("output: 0");
         lastErrorLabel = new JLabel("Последняя ошибка: -");
+        Font monoStatsFont = new Font(Font.MONOSPACED, Font.PLAIN, 12);
+        sessionInputLabel.setFont(monoStatsFont);
+        sessionOutputLabel.setFont(monoStatsFont);
         JPanel sessionCol = new JPanel(new GridLayout(4, 1, 2, 2));
         sessionCol.add(new JLabel("Сессия:"));
         sessionCol.add(sessionInputLabel);
@@ -353,6 +361,8 @@ public class ClaudeDesktopClient extends JFrame {
 
         lastRequestInputLabel = new JLabel("input: 0");
         lastRequestOutputLabel = new JLabel("output: 0");
+        lastRequestInputLabel.setFont(monoStatsFont);
+        lastRequestOutputLabel.setFont(monoStatsFont);
         JPanel lastCol = new JPanel(new GridLayout(3, 1, 2, 2));
         lastCol.add(new JLabel("Последний запрос:"));
         lastCol.add(lastRequestInputLabel);
@@ -490,7 +500,7 @@ public class ClaudeDesktopClient extends JFrame {
         c.gridx = x; c.gridwidth = 1; c.weightx = 0; c.fill = GridBagConstraints.NONE;
         JLabel l = new JLabel(label);
         l.setHorizontalAlignment(JLabel.LEFT);
-        l.setPreferredSize(new java.awt.Dimension(250, l.getPreferredSize().height));
+        l.setPreferredSize(new java.awt.Dimension(185, l.getPreferredSize().height));
         panel.add(l, c);
         c.gridx = x + 1; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
         panel.add(component, c);
@@ -554,7 +564,7 @@ public class ClaudeDesktopClient extends JFrame {
                 try {
                     Message response = get();
                     String rawAnswer = extractText(response);
-                    FileProcessingResult processingResult = fileTransport.extractGeneratedFiles(rawAnswer);
+                    FileProcessingResult processingResult = fileTransport.extractGeneratedFiles(rawAnswer, archiveSourceRoot(chat.sourceRoot));
                     for (UserVisibleFile file : processingResult.generatedFiles()) chat.aiFiles.add(file);
                     String visibleAnswer = processingResult.visibleAnswer().isBlank() ? rawAnswer : processingResult.visibleAnswer();
                     history.add(new MessageEntry("user", fullUserMessage, displayUserMessage));
@@ -670,7 +680,7 @@ public class ClaudeDesktopClient extends JFrame {
             return;
         }
         try {
-            Path savedTo = fileTransport.saveGeneratedFiles(selected, downloadsDir(), modelDisplayName(chat.modelName), currentChatName, chat.sourceRoot);
+            Path savedTo = fileTransport.saveGeneratedFiles(selected, downloadsDir(), modelDisplayName(chat.modelName), currentChatName, archiveSourceRoot(chat.sourceRoot));
             statusLabel.setText("Статус: файлы ИИ сохранены: " + savedTo);
             JOptionPane.showMessageDialog(this, "Сохранено: " + savedTo);
         } catch (IOException ex) {
@@ -754,7 +764,6 @@ public class ClaudeDesktopClient extends JFrame {
                 try {
                     Message msg = get();
                     refreshSettingsIndicators(true, true, "-");
-                    statusLabel.setText("Статус: ключ проверен");
                 } catch (Exception ex) {
                     String message = rootMessage(ex);
                     refreshSettingsIndicators(true, false, message);
@@ -915,6 +924,12 @@ public class ClaudeDesktopClient extends JFrame {
     private void saveChatSnapshots() throws IOException {
         Path dir = configDir.resolve("chats-md");
         Files.createDirectories(dir);
+        try (var stream = Files.list(dir)) {
+            stream.filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".md"))
+                    .forEach(path -> {
+                        try { Files.deleteIfExists(path); } catch (IOException ignored) { }
+                    });
+        }
         StringBuilder index = new StringBuilder("Автосохранённые истории чатов\n\n");
         for (Map.Entry<String, ChatState> entry : chats.entrySet()) {
             String fileName = safeFileName(modelDisplayName(entry.getValue().modelName)) + "_" + safeFileName(entry.getKey()) + ".md";
@@ -1049,7 +1064,7 @@ public class ClaudeDesktopClient extends JFrame {
         }
         systemPromptArea.setText(chat.systemPrompt);
         projectDirField.setText(chat.projectDir == null || chat.projectDir.isBlank() ? defaultProjectDirString() : chat.projectDir);
-        sourceRootCombo.setSelectedItem(chat.sourceRoot == null ? "src/main/java" : chat.sourceRoot);
+        sourceRootCombo.setSelectedItem(sourceRootComboValue(chat.sourceRoot));
         maxOutputTokensField.setText(String.valueOf(chat.maxOutputTokens));
         modelCombo.setSelectedItem(chat.modelName);
         modelCombo.setEnabled(chat.messages.isEmpty());
@@ -1085,6 +1100,24 @@ public class ClaudeDesktopClient extends JFrame {
 
     private String formatTokenLine(String label, long value) {
         return String.format("%-7s %12d", label + ":", value);
+    }
+
+
+    private String sourceRootComboValue(String value) {
+        if (value == null || value.isBlank()) return "";
+        String normalized = UserVisibleFile.normalize(value);
+        if (normalized.equals("src/main/java")) return "main/java";
+        if (normalized.equals("src")) return "";
+        if (normalized.startsWith("src/")) return normalized.substring("src/".length());
+        return normalized;
+    }
+
+    private String archiveSourceRoot(String comboValue) {
+        String value = comboValue == null ? "" : comboValue.trim();
+        if (value.isBlank()) return "src";
+        String normalized = UserVisibleFile.normalize(value);
+        if (normalized.startsWith("src/")) return normalized;
+        return "src/" + normalized;
     }
 
     private long technicalMaxOutput(String modelName) {
@@ -1211,7 +1244,7 @@ public class ClaudeDesktopClient extends JFrame {
         public String modelName = DEFAULT_MODEL_NAME;
         public String systemPrompt = "Ты — ведущий Java-разработчик. Работаешь только с Claude Opus 4.7. Отвечай точно, проверяй код, предлагай минимальные рабочие правки.";
         public String projectDir = "";
-        public String sourceRoot = "src/main/java";
+        public String sourceRoot = "main/java";
         public long maxOutputTokens = DEFAULT_OUTPUT_TOKENS;
         public long modelContextTokens = 0L;
         public long modelTechnicalMaxOutput = MODEL_MAX_OUTPUT_TOKENS.getOrDefault(DEFAULT_MODEL_NAME, 0L);
