@@ -72,7 +72,7 @@ https://github.com/Alexey-Tkachev/ClaudeClient2/releases
 Команда запуска:
 
 ```bash
-java -jar claude-opus-desktop-client-1.2.0.jar
+java -jar claude-opus-desktop-client-<version>.jar
 ```
 
 ## Техническая спецификация
