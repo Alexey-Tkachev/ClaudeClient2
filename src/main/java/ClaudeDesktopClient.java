@@ -70,7 +70,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class ClaudeDesktopClient extends JFrame {
-    private static final String APP_VERSION = "1.0.1";
+    private static final String APP_VERSION = "1.0.2";
     private static final String APP_TITLE = "Claude Opus Desktop Client " + APP_VERSION;
     private static final String DEFAULT_MODEL_NAME = "claude-opus-4-7";
     private static final String DEFAULT_MODEL_DISPLAY_NAME = "Claude Opus 4.7";

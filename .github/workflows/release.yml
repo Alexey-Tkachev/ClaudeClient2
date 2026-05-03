@@ -25,7 +25,12 @@ jobs:
       - name: Build JAR with Maven
         run: mvn -B clean package -DskipTests
 
+      - name: Prepare release JAR
+        run: |
+          mkdir release
+          cp $(find target -maxdepth 1 -name "*.jar" ! -name "original-*.jar" | head -n 1) release/ClaudeClient2.jar
+
       - name: Upload JAR to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/*.jar
+          files: release/ClaudeClient2.jar
