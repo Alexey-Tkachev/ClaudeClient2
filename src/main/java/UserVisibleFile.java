@@ -1,27 +1,29 @@
+import java.io.IOException;
 import java.io.Serial;
 import java.io.Serializable;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 
 public class UserVisibleFile implements Serializable
 {
     @Serial
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 3L;
 
     public enum SourceKind
     {LOCAL, UPLOADED_TO_MODEL, GENERATED_BY_AI}
 
     private final String displayName;
     private final String relativePath;
-    private final Path localPath;
+    private final String localPathString;
     private final byte[] content;
     private final SourceKind sourceKind;
 
     public UserVisibleFile(String displayName, String relativePath, Path localPath, byte[] content, SourceKind sourceKind)
     {
-        this.displayName = displayName;
-        this.relativePath = normalize(relativePath == null || relativePath.isBlank() ? displayName : relativePath);
-        this.localPath = localPath;
+        this.displayName = displayName == null || displayName.isBlank() ? fileNameFrom(relativePath) : displayName;
+        this.relativePath = normalize(relativePath == null || relativePath.isBlank() ? this.displayName : relativePath);
+        this.localPathString = localPath == null ? null : localPath.toAbsolutePath().normalize().toString();
         this.content = content == null ? null : Arrays.copyOf(content, content.length);
         this.sourceKind = sourceKind;
     }
@@ -38,7 +40,7 @@ public class UserVisibleFile implements Serializable
 
     public Path localPath()
     {
-        return localPath;
+        return localPathString == null || localPathString.isBlank() ? null : Path.of(localPathString);
     }
 
     public SourceKind sourceKind()
@@ -51,20 +53,71 @@ public class UserVisibleFile implements Serializable
         return content == null ? null : Arrays.copyOf(content, content.length);
     }
 
+    public long sizeBytes()
+    {
+        if (content != null) return content.length;
+        Path path = localPath();
+        if (path != null && Files.isRegularFile(path))
+        {
+            try
+            {
+                return Files.size(path);
+            }
+            catch (IOException ignored)
+            {
+                return -1L;
+            }
+        }
+        return -1L;
+    }
+
+    public String sizeLabel()
+    {
+        long bytes = sizeBytes();
+        if (bytes < 0) return "? КБ";
+        long kb = Math.max(1L, Math.round(bytes / 1024.0));
+        return kb + " КБ";
+    }
+
+    public String displayPathFromSrc()
+    {
+        String normalized = normalize(relativePath);
+        int idx = normalized.indexOf("src/");
+        if (idx >= 0) return normalized.substring(idx);
+        return normalized;
+    }
+
+    public String fileNameOnly()
+    {
+        return fileNameFrom(relativePath);
+    }
+
     public UserVisibleFile asUploaded()
     {
-        return new UserVisibleFile(displayName, relativePath, localPath, content, SourceKind.UPLOADED_TO_MODEL);
+        return new UserVisibleFile(displayName, relativePath, localPath(), content, SourceKind.UPLOADED_TO_MODEL);
     }
 
     @Override
     public String toString()
     {
-        if (sourceKind == SourceKind.LOCAL && localPath != null) return localPath.toString();
-        return relativePath;
+        return displayPathFromSrc() + " — " + sizeLabel();
     }
 
-    private static String normalize(String value)
+    public static String normalize(String value)
     {
-        return value.replace('\\', '/').replaceAll("^/+", "");
+        if (value == null) return "";
+        String normalized = value.replace('\\', '/').replaceAll("^/+", "");
+        while (normalized.contains("../"))
+        {
+            normalized = normalized.replace("../", "");
+        }
+        return normalized.isBlank() ? "generated.txt" : normalized;
+    }
+
+    private static String fileNameFrom(String value)
+    {
+        String normalized = normalize(value == null || value.isBlank() ? "file" : value);
+        int slash = normalized.lastIndexOf('/');
+        return slash >= 0 ? normalized.substring(slash + 1) : normalized;
     }
 }
